@@ -30,6 +30,7 @@ import io.flutter.plugin.common.EventChannel;
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.EventChannel.EventSink;
 
+
 /**
  * FlutterUsbWritePlugin
  */
@@ -42,9 +43,14 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
   private MethodChannel methodChannel;
   private EventChannel eventChannel;
   private BroadcastReceiver usbStateChangeReceiver;
-  private UsbEndpoint ep;
-  private UsbInterface mInterface;
-  private UsbDeviceConnection m_Connection;
+
+  class UsbPort {
+    UsbEndpoint ep;
+    UsbInterface mInterface;
+    UsbDeviceConnection m_Connection;
+  }
+
+  HashMap<Integer, UsbPort> connections = new HashMap();
 
   private static final String ACTION_USB_PERMISSION = "com.android.example.USB_PERMISSION";
   private static final String ACTION_USB_ATTACHED = "android.hardware.usb.action.USB_DEVICE_ATTACHED";
@@ -91,10 +97,12 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
       open(vid, pid, deviceId, result);
       break;
     case "write":
-      write((byte[]) call.argument("bytes"), result);
+      deviceId = (int) (call.argument("deviceId") == null ? 0 : call.argument("deviceId"));
+      write(deviceId, (byte[]) call.argument("bytes"), result);
       break;
     case "close":
-      close();
+      deviceId = (int) (call.argument("deviceId") == null ? 0 : call.argument("deviceId"));
+      close(deviceId);
       result.success(true);
       break;
     case "controlTransfer":
@@ -105,7 +113,8 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
       byte[] buffer = call.argument("bytes");
       int length = (int) (call.argument("length") == null ? 0 : call.argument("length"));
       int timeout = (int) (call.argument("timeout") == null ? 0 : call.argument("timeout"));
-      int callResult = setControlCommand(requestType, request, value, index, buffer, length, timeout);
+      deviceId = (int) (call.argument("deviceId") == null ? 0 : call.argument("deviceId"));
+      int callResult = setControlCommand(deviceId, requestType, request, value, index, buffer, length, timeout);
       result.success(callResult);
       break;
     default:
@@ -137,15 +146,16 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
     return applicationContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST);
   }
 
-  private void write(final byte[] bytes, final Result result) {
+  private void write(int deviceId, final byte[] bytes, final Result result) {
+    UsbPort port = connections.get(deviceId);
     if (bytes != null) {
       int transferResult = -1;
       // 实测不调用 claimInterface，bulkTransfer 返回 -1
       // if (this.ep != null && this.mInterface != null && this.m_Connection != null) {
       //   transferResult = this.m_Connection.bulkTransfer(this.ep, bytes, bytes.length, 0);
       // } else {
-        if (this.m_Connection.claimInterface(this.mInterface, true)) {
-          transferResult = this.m_Connection.bulkTransfer(this.ep, bytes, bytes.length, 0);
+        if (port.m_Connection.claimInterface(port.mInterface, true)) {
+          transferResult = port.m_Connection.bulkTransfer(port.ep, bytes, bytes.length, 0);
         }
       // }
       result.success(transferResult >= 0);
@@ -170,9 +180,10 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
     };
 
     try {
-      this.close();
-      m_Connection = m_Manager.openDevice(device);
-      if (m_Connection == null && allowAcquirePermission) {
+      this.close(device.getDeviceId());
+      UsbPort port = new UsbPort();
+      port.m_Connection = m_Manager.openDevice(device);
+      if (port.m_Connection == null && allowAcquirePermission) {
         acquirePermissions(device, cb);
         return;
       }
@@ -182,27 +193,28 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
         return;
       }
 
-      this.mInterface = device.getInterface(0);
-      if (this.mInterface == null) {
+      port.mInterface = device.getInterface(0);
+      if (port.mInterface == null) {
         openDeviceCb.onFailed(device, "INTERFACE_NOT_FOUND_ERROR", "USB Interface not found.");
         return;
       }
 
-      if (this.mInterface.getEndpointCount() == 0) {
+      if (port.mInterface.getEndpointCount() == 0) {
         openDeviceCb.onFailed(device, "ENDPOINT_NOT_FOUND_ERROR", "USB Endpoint not found.");
         return;
       }
 
-      for (int i = 0; i < this.mInterface.getEndpointCount(); ++i) {
-        if (this.mInterface.getEndpoint(i).getType() == 2 && this.mInterface.getEndpoint(i).getDirection() != 128) {
-          this.ep = this.mInterface.getEndpoint(i);
+      for (int i = 0; i < port.mInterface.getEndpointCount(); ++i) {
+        if (port.mInterface.getEndpoint(i).getType() == 2 && port.mInterface.getEndpoint(i).getDirection() != 128) {
+          port.ep = port.mInterface.getEndpoint(i);
         }
       }
 
-      if (this.ep == null) {
+      if (port.ep == null) {
         openDeviceCb.onFailed(device, "ENDPOINT_NOT_FOUND_ERROR", "USB Endpoint not found.");
         return;
       }
+      connections.put(device.getDeviceId(), port);
       openDeviceCb.onSuccess(device);
     } catch (java.lang.SecurityException e) {
 
@@ -215,12 +227,11 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
     }
   }
 
-  public synchronized void close() {
-    if (this.m_Connection != null) {
-      this.m_Connection.close();
-      this.ep = null;
-      this.mInterface = null;
-      this.m_Connection = null;
+  public synchronized void close(int deviceId) {
+    UsbPort port = this.connections.get(deviceId);
+    if (port != null) {
+      port.m_Connection.close();
+      this.connections.remove(deviceId);
     }
   }
 
@@ -359,9 +370,10 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
     m_Manager.requestPermission(device, permissionIntent);
   }
 
-  private int setControlCommand(int requestType, int request, int value, int index, byte[] buffer, int length,
+  private int setControlCommand(int deviceId, int requestType, int request, int value, int index, byte[] buffer, int length,
       int timeout) {
-    int response = m_Connection.controlTransfer(requestType, request, value, index, buffer, length, 0);
+    UsbPort port = connections.get(deviceId);
+    int response = port.m_Connection.controlTransfer(requestType, request, value, index, buffer, length, 0);
     Log.i(TAG, "Control Transfer Response: " + String.valueOf(response));
     return response;
   }

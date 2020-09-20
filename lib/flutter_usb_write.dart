@@ -191,8 +191,8 @@ class FlutterUsbWrite {
 
   /// Sends raw bytes to USB device.
   /// Requires open connection to USB device.
-  Future<bool> write(Uint8List bytes) async {
-    Map<String, dynamic> args = {"bytes": bytes};
+  Future<bool> write(UsbDevice device, Uint8List bytes) async {
+    Map<String, dynamic> args = {"deviceId": device.deviceId, "bytes": bytes};
     try {
       return await _methodChannel.invokeMethod("write", args);
     } on PlatformException catch (e) {
@@ -201,9 +201,10 @@ class FlutterUsbWrite {
   }
 
   /// Close USB connection
-  Future close() async {
+  Future close(UsbDevice device) async {
+    Map<String, dynamic> args = {"deviceId": device.deviceId};
     try {
-      return await _methodChannel.invokeMethod("close");
+      return await _methodChannel.invokeMethod("close", args);
     } on PlatformException catch (e) {
       throw _getTypedException(e);
     }

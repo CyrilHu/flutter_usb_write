@@ -136,8 +136,10 @@ class _MyAppState extends State<MyApp> {
                     return;
                   }
                   String data = _textController.text + "\r\n";
-                  await _flutterUsbWrite
-                      .write(Uint8List.fromList(data.codeUnits));
+                  await _flutterUsbWrite.write(
+                      _devices.firstWhere(
+                          (element) => element.deviceId == _connectedDeviceId),
+                      Uint8List.fromList(data.codeUnits));
                 },
         ),
       ),
@@ -205,7 +207,8 @@ class _MyAppState extends State<MyApp> {
 
   Future _disconnect() async {
     try {
-      await _flutterUsbWrite.close();
+      await _flutterUsbWrite.close(_devices
+          .firstWhere((element) => element.deviceId == _connectedDeviceId));
       setState(() {
         _connectedDeviceId = null;
       });
