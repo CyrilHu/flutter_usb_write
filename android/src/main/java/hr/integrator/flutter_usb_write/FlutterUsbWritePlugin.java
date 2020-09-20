@@ -230,7 +230,9 @@ public class FlutterUsbWritePlugin implements FlutterPlugin, MethodCallHandler, 
   public synchronized void close(int deviceId) {
     UsbPort port = this.connections.get(deviceId);
     if (port != null) {
-      port.m_Connection.close();
+      if (port.m_Connection != null) {
+        port.m_Connection.close();
+      }
       this.connections.remove(deviceId);
     }
   }
